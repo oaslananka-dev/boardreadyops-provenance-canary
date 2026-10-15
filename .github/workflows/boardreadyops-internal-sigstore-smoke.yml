@@ -40,10 +40,10 @@ jobs:
           [[ "${{ github.event.repository.fork }}" == "false" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]]
-          cat > "$RUNNER_TEMP/signer/sign.cjs" <<'JSCODE'
-          const fs=require('node:fs');
-          const crypto=require('node:crypto');
-          const {attestProvenance}=require('@actions/attest');
+          cat > "$RUNNER_TEMP/signer/sign.mjs" <<'JSCODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          import {attestProvenance} from '@actions/attest';
           (async()=>{
             const p='gateway-board.kicad_pcb';
             const digest=crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -61,7 +61,7 @@ jobs:
             console.log(JSON.stringify({bundleBytes:bytes,attestationIdPresent:!!result.attestationID,publicLogIdPresent:!!result.tlogID,repo:process.env.GITHUB_REPOSITORY,sourceSha:process.env.GITHUB_SHA}));
           })().catch(e=>{console.error(e?.message||'Signing failed');process.exitCode=1});
           JSCODE
-          node "$RUNNER_TEMP/signer/sign.cjs"
+          node "$RUNNER_TEMP/signer/sign.mjs"
       - name: Retain GitHub-internal signed bundle in owner-controlled artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
