@@ -1,0 +1,2 @@
+BoardReadyOps App installation permission probe (no customer content).
+Source bound OIDC run 38785269319 remains on protected main.
