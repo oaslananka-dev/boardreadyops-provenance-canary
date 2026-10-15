@@ -1,2 +1,3 @@
 BoardReadyOps App installation permission probe (no customer content).
 Source bound OIDC run 38785269319 remains on protected main.
+Second bounded PR synchronize probe at 2026-10-15 (synthetic fixture only).
