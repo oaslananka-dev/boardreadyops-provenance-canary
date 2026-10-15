@@ -1,2 +1,5 @@
 # Generated manufacturing attestation bytes; never include in reviewed source commits.
 build/boardreadyops-attested/
+
+# KiCad per-user local settings are not reviewed design source.
+*.kicad_prl
