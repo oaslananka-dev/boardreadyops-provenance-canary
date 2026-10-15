@@ -1,0 +1,127 @@
+# Public synthetic smoke test only. Private use MUST disclose public Sigstore/Rekor metadata.
+# Independent non-fork public test target under oaslananka-dev; no customer data.
+# The immutable full pin below references the reviewed protected-merge commit.
+# Before adoption, independently review the approved protected-merge
+# commit SHA containing the export action and the tracked project path.
+# Commit the workflow + build/boardreadyops-attested/ ignore rule on a protected
+# branch BEFORE invoking workflow_dispatch. Never trigger on pull_request.
+name: BoardReadyOps experimental Sigstore signing (public synthetic only)
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  attest-manufacturing-export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout the exact reviewed source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - name: Install Node 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install and check KiCad 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
+          sudo apt-get update -qq
+          sudo apt-get install --yes kicad
+          [[ "$(kicad-cli version)" == 10.0.* ]]
+      - name: Generate reviewed Gerber/Excellon bytes and subject inventory
+        id: export
+        # Immutable reviewed protected-merge SHA shown for this test target.
+        # Verify the pin matches the intended BoardReadyOps Action contents.
+        uses: oaslananka/boardreadyops/.github/actions/manufacturing-attested-export@8ff9d9b5cdc537fe1eaa00afee4f2d8325044e85
+        with:
+          reviewed-source-sha: ${{ github.sha }}
+          project: gateway-board.kicad_pro # REPLACE with a real tracked project
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Build immutable source-and-subject claim from GitHub runner identity
+        id: claim
+        shell: bash
+        env:
+          SUBJECTS: ${{ steps.export.outputs.subject-checksums }}
+          EXPECTED_REF: ${{ github.ref }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          IS_FORK: ${{ github.event.repository.fork }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          [[ "$REF_PROTECTED" == "true" && "$IS_FORK" == "false" ]]
+          [[ "$RUNNER_ENV" == "github-hosted" && "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]
+          [[ "$GITHUB_REF" == refs/heads/* ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          claim_path="$RUNNER_TEMP/boardreadyops-keyless-claim.json"
+          python3 - "$SUBJECTS" "$claim_path" <<'PYCODE'
+          import json,os,re,sys
+          from pathlib import Path
+          lines=Path(sys.argv[1]).read_text().splitlines()
+          hashes={}
+          for line in lines:
+              match=re.fullmatch(r"([0-9a-f]{64})  ([a-zA-Z0-9_.\/-]+)", line)
+              if not match or match[2] in hashes or any(x in (".","..","") for x in match[2].split("/")):
+                  raise SystemExit("Unsafe signing subject inventory")
+              hashes[match[2]]=match[1]
+          if len(hashes)<3 or not any(p.endswith("/manifest.json") for p in hashes):
+              raise SystemExit("Missing signed manufacturing subjects")
+          data={
+              "kind":"boardreadyops.experimental-sigstore-export-v1",
+              "repository":os.environ["GITHUB_REPOSITORY"],
+              "repositoryId":os.environ["GITHUB_REPOSITORY_ID"],
+              "reviewedSha":os.environ["GITHUB_SHA"],
+              "sourceRef":os.environ["GITHUB_REF"],
+              "workflowRef":os.environ["GITHUB_WORKFLOW_REF"],
+              "event":os.environ["GITHUB_EVENT_NAME"],
+              "runId":os.environ["GITHUB_RUN_ID"],
+              "runAttempt":os.environ["GITHUB_RUN_ATTEMPT"],
+              "subjects":[{"name":k,"sha256":v} for k,v in sorted(hashes.items())],
+          }
+          Path(sys.argv[2]).write_text(json.dumps(data,sort_keys=True,separators=(",",":"))+"\n")
+          PYCODE
+          echo "claim=$claim_path" >> "$GITHUB_OUTPUT"
+      - name: Sign with Sigstore Public Good (PUBLIC canary; never private without disclosure)
+        id: cosign
+        shell: bash
+        env:
+          CLAIM: ${{ steps.claim.outputs.claim }}
+        run: |
+          set -euo pipefail
+          bundle_path="$RUNNER_TEMP/boardreadyops-experimental.sigstore.json"
+          cosign sign-blob --yes --bundle "$bundle_path" "$CLAIM"
+          cosign verify-blob "$CLAIM" \
+            --bundle "$bundle_path" \
+            --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --certificate-github-workflow-trigger "$GITHUB_EVENT_NAME"
+          echo "bundle=$bundle_path" >> "$GITHUB_OUTPUT"
+      - name: Retain signed claim and bundle inside GitHub-hosted Actions artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reviewed-manufacturing-sigstore-proof
+          path: |
+            ${{ steps.claim.outputs.claim }}
+            ${{ steps.cosign.outputs.bundle }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Keep the exact generated bytes and manifest inside the target repository
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reviewed-manufacturing-export
+          path: ${{ steps.export.outputs.export-directory }}/
+          if-no-files-found: error
+          retention-days: 7
