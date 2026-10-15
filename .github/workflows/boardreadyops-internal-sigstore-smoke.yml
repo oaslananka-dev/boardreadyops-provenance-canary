@@ -1,0 +1,71 @@
+# Public synthetic verification of GitHub-internal Sigstore without GitHub attestations API storage.
+# Never sign customer designs in this fixture. The bundle must remain inside this target's artifact.
+name: BoardReadyOps internal-Sigstore no-write experiment
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  internal-sigstore-smoke:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 12
+    steps:
+      - name: Checkout immutable reviewed SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install Node 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install official signing library in temporary runner directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/signer" --no-audit --no-fund --ignore-scripts --save-exact @actions/attest@3.2.0
+      - name: Sign actual tracked source using GitHub-internal Sigstore (skip API write)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]
+          [[ "${{ github.ref_protected }}" == "true" ]]
+          [[ "${{ github.event.repository.fork }}" == "false" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]]
+          cat > "$RUNNER_TEMP/signer/sign.cjs" <<'JSCODE'
+          const fs=require('node:fs');
+          const crypto=require('node:crypto');
+          const {attestProvenance}=require('@actions/attest');
+          (async()=>{
+            const p='gateway-board.kicad_pcb';
+            const digest=crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+            const result=await attestProvenance({
+              subjects:[{name:p,digest:{sha256:digest}}],
+              token:process.env.GH_TOKEN,
+              sigstore:'github',
+              skipWrite:true,
+            });
+            if(result.attestationID||result.tlogID)throw new Error('Unexpected public log or API persisted attestation');
+            const output=process.env.RUNNER_TEMP+'/boardreadyops-private-compatible.sigstore.json';
+            fs.writeFileSync(output,JSON.stringify(result.bundle));
+            const bytes=fs.statSync(output).size;
+            if(bytes<500)throw new Error('Attestation bundle unexpectedly small');
+            console.log(JSON.stringify({bundleBytes:bytes,attestationIdPresent:!!result.attestationID,publicLogIdPresent:!!result.tlogID,repo:process.env.GITHUB_REPOSITORY,sourceSha:process.env.GITHUB_SHA}));
+          })().catch(e=>{console.error(e?.message||'Signing failed');process.exitCode=1});
+          JSCODE
+          node "$RUNNER_TEMP/signer/sign.cjs"
+      - name: Retain GitHub-internal signed bundle in owner-controlled artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: internal-sigstore-bundle-smoke
+          path: ${{ runner.temp }}/boardreadyops-private-compatible.sigstore.json
+          retention-days: 3
+          if-no-files-found: error
