@@ -1,0 +1,2 @@
+# Generated manufacturing attestation bytes; never include in reviewed source commits.
+build/boardreadyops-attested/
